@@ -22,24 +22,41 @@ API_MD = r"!!CHANGE ME!!"
 started = False
 frm = None 
 
+def remove_function_prefix(name):
+    prefixes = [ida_name.FUNC_IMPORT_PREFIX, 'cs:', 'ds:', 'j_']
+    for prefix in prefixes:
+        if name.startswith(prefix):
+            return name[len(prefix):]
+    return name
+
+
 def get_selected_api_name():
     """
     get selected item and extract function name from it 
     via https://github.com/idapython/src/blob/e1c108a7df4b5d80d14d8b0c14ae73b924bff6f4/Scripts/msdnapihelp.py#L48
     return: api name as string 
     """
-    try:
-        v = ida_kernwin.get_current_viewer()
-        name, ok = ida_kernwin.get_highlight(v)
-        if not ok:
-            # print("No identifier was highlighted")
-            return None 
-        t = ida_name.FUNC_IMPORT_PREFIX
-        if name.startswith(t):
-            return name[len(t):]
-        return name
-    except:
+    v = ida_kernwin.get_current_viewer()
+    highlight = ida_kernwin.get_highlight(v)
+    if not highlight:
+        # print("No identifier was highlighted")
         return None 
+
+    name, _ = highlight
+
+    # remove common prefixes
+    prefixes = [ida_name.FUNC_IMPORT_PREFIX, 'cs:', 'ds:', 'j_']
+    for prefix in prefixes:
+        if name.startswith(prefix):
+            name = name[len(prefix):]
+            break
+    
+    # select function call in decompiler view
+    pos = name.find('(')
+    if pos != -1:
+        name = name[:pos]
+
+    return name
 
 class MSDN(PluginForm):
     def OnCreate(self, form):
