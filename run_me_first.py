@@ -13,16 +13,19 @@ Updates:
         - added option to overwrite and regenerate api doc directory 
         - added functionality to flag functions that might have not been parsed correctly
         - replaced print output with logging.INFO
-
+    * Version 2.1
+        - code cleanup
+        - logging params passed via arguments
+        - clean markdown content before saving
 """
 
 import yaml 
 import argparse
-import glob 
-import os
 import logging
+import shutil
+import pathlib
+import re
 
-logging.basicConfig(level=logging.INFO, format='%(levelname)s - %(message)s')
 
 SDK_API_DIR = "sdk-api"
 SDK_DOCS_DIR = "sdk-api-src"
@@ -31,138 +34,170 @@ DRIVER_SDK_DOCS_DIR = "wdk-ddi-src"
 CONTENT_DIR = "content"
 NEW_API_DIR = "apis_md"
 
-# The data for identifying functions is not consistent so this removes some fps. 
-IGNORE = ["Write.md", "WinUSB.md", "WIA.md", "WFP.md", "USB.md", "Universal.md", "UFX.md", "UEFI.md",
-            "Testing.md", "Serial.md", "Root.md", "Querying.md", "Port.md", "Overview.md", "Native.md",
-            "Can.md", "Calling.md", "Call.md", "Bring.md", "Battery.md", "AddTarget.md", "AddPoint.md",
-            "AddLink.md", "Access.md", "IRP.md", "How.md", "Internet.md", "IPsec.md", "Language.md"]
-SKIP_CHARs = ["+", "=", "()", "!" , "::" ] 
 
-def percentage(part, whole):
-    return 100 * float(part)/float(whole)
+class FunctionFileDoc(object):
+    IGNORED_NAMES = frozenset([
+        'Write', 'WinUSB', 'WIA', 'WFP', 'USB', 'Universal', 'UFX', 'UEFI',
+        'Testing', 'Serial', 'Root', 'Querying', 'Port', 'Overview', 'Native',
+        'Can', 'Calling', 'Call', 'Bring', 'Battery', 'AddTarget', 'AddPoint',
+        'AddLink', 'Access', 'IRP', 'How', 'Internet', 'IPsec', 'Language',
+    ])
+    SKIP_NAME_CHARSET = ('+', '=', '()', '!' , '::')
 
-def parse_and_copy(file_path, debug_logging):
-    try:
-        # there are a lot of encoding errors with the sdk-api docs
-        with open(file_path, "r", errors = "ignore") as infile:
+    def __init__(self, filepath: str):
+        self._filepath = filepath
+        with open(self._filepath, "r", errors = "ignore") as infile:
             data = infile.read()
-    except Exception as e:
-        if debug_logging:
-            debug_logging.debug("could not access file %s, %s" % (file_path, e))
-        return None
-    # the api docs start with a yaml and then markdown seperated by "---"
-    data_len = len(data )
-    try:
-        data_split = data.split("---")
-        yaml_data = yaml.safe_load(data_split[1])
-    except Exception as e:
-        if debug_logging:
-            debug_logging.debug("yaml load issue on %s, %s"  % (file_path, e))
-        return None
-    if "title" not in yaml_data:
-        if debug_logging:
-            debug_logging.debug("title is not present in %s" % (file_path))
-        return None
-    if " function" not in yaml_data["title"]:
-        if debug_logging:
-            debug_logging.debug("function is not present in %s" % (file_path))
-        return None
-    # get api name 
-    function_name = yaml_data["title"].split(" ")[0]
-    if not function_name:
-        if debug_logging:
-            debug_logging.debug("api name was not found in %s"  % (file_path))
-        return None 
-    function_name = function_name.replace("\\", "")
-    if function_name + ".md" in IGNORE:
-        if debug_logging:
-            debug_logging.debug("function name %s in ignore list in %s" % (function_name, file_path))
-        return None 
-    if any([x in function_name for x in SKIP_CHARs]):
-        if debug_logging:
-            debug_logging.debug("invalid function name %s in %s"  % (function_name, file_path))
-        return None 
-    api_path = os.path.join(NEW_API_DIR, function_name + ".md" )
-    api_file_len = None
-    try:
-        with open(api_path, "w") as api_file:
-            api_file.write("---".join(data_split[2:]))
-            api_file.write(" " + os.linesep + "```")
-            api_file.write(data_split[1])
-            api_file.write("```" + os.linesep)
-            api_file.seek(0, os.SEEK_END)
-            api_file_len = api_file.tell() 
-    except Exception as e:
-        if debug_logging:
-            debug_logging.debug("file creation of %s to %s exception %s" % (function_name, api_path, e))
-        return None 
-    if percentage(api_file_len, data_len) < 85.0:
-        if debug_logging:
-            debug_logging.debug("likely parsing issue with %s and %s" % (file_path, api_path))
-    return  
+
+        parts = data.split('---')
+        self.meta = yaml.safe_load(parts[1]) # Front Matter
+        self.content = '---'.join(parts[2:]) # Markdown content
+
+    def verify(self) -> bool:
+        name = self.name
+        if name in self.IGNORED_NAMES:
+            logging.debug(f"function name {name} in ignore list in {self._filepath}")
+            return False 
+
+        if any([x in name for x in self.SKIP_NAME_CHARSET]):
+            logging.debug(f"invalid function name {name} in {self._filepath}")
+            return False
+        
+        return True
+
+    def dump(self, filepath: str, clean_markdown: bool = True, force: bool = False):
+        if not force and not self.verify():
+            raise ValueError(f'invalid file format in {self._filepath}')
+
+        with open(filepath, "w") as handle:
+            content = self._clean_markdown(self.content) if clean_markdown else self.content
+            handle.write(content)
+
+    @staticmethod
+    def _clean_markdown(text: str):
+        # replace <a>, <b> tags to bold text
+        text = re.sub(r'\</?(a|b|div)[^\>]*\>', '**', text)
+
+        # replace <i> tags to italic text
+        text = re.sub(r'\</?(i)[^\>]*\>', '*', text)
+
+        # remove <div> tag
+        text = re.sub(r'\</?(div)[^\>]*\>', '', text)
     
+        # '## -description' -> '## Description'
+        text = re.sub(r'# -(.+)', lambda match: f'# {match.group(1).capitalize()}', text)
+
+        # remove "See also" links section
+        text = re.sub(r'## See-also[^#]+', '', text, re.MULTILINE)
+
+        # remove multiple chars
+        text = text \
+            .replace('****', '**') \
+            .replace('\n**\n', '\n') \
+            .replace('\n\n\n', '\n\n')
+
+        return text
+
+    @property
+    def name(self):
+        title = self.meta.get('title')
+        if title is None:
+            logging.debug(f"title is not present in {self._filepath}")
+            return ValueError
+
+        match = re.search('([^\s]+) function', title)
+        if not match:
+            logging.debug(f"unsupported title format in {self._filepath}")
+            return ValueError
+        
+        return match.group(1).replace('\\', '')
+
+
+def parse_file(filepath: str):
+    try:
+        unit = FunctionFileDoc(filepath)
+        filename = unit.name + '.md'
+        path = pathlib.Path(NEW_API_DIR) / filename
+        unit.dump(str(path))
+    except Exception as e:
+        logging.debug(f"failed to process {filepath}: {e}")
+        return None
+
+
+def parse_from_directory(dirpath: str):
+    path = pathlib.Path(dirpath)
+    
+    if not path.exists() or not path.is_dir():
+        logging.warning(f"{path} directory could not be found")
+        logging.warning("try: git submodule update --recursive")
+        logging.warning(f"skipping {path}")
+        return False
+
+    for filepath in path.rglob('*.md'):
+        if not filepath.name.startswith('_'):
+            parse_file(filepath)
+    
+
+def create_output_directory(dirpath: str, force: bool = False):
+    path = pathlib.Path(dirpath)
+    if path.exists():
+        if not force:
+            logging.error(f"The directory {path} is already present, use --overwrite")
+            exit(-1)
+
+        logging.info(f"deleting and overwriting {path} directory")
+        shutil.rmtree(str(path)) 
+
+    logging.info(f"creating {path.name} directory at {path.absolute()}")
+    path.mkdir(parents=True, exist_ok=True)
+
 
 def main():
-    runmefirst = argparse.ArgumentParser(description="msdocviewer parser component") 
-    runmefirst.add_argument("-l", "--log", action="store_true", default=False, help="Log all parsing errors to debug-parser.log")
-    runmefirst.add_argument("-o", "--overwrite", action="store_true", default=False, help="overwrite apis_md directory")
+    parser = argparse.ArgumentParser(description="msdocviewer parser component") 
+    parser.add_argument(
+        '-l', '--log', 
+        help="Log all parsing errors to debug-parser.log",
+        default=False, 
+        action="store_true", 
+    )
+    parser.add_argument(
+        '-o', '--overwrite', 
+        help="overwrite apis_md directory",
+        action="store_true", 
+        default=False, 
+    )
+    parser.add_argument(
+        '-d', '--debug',
+        help="Print lots of debugging statements",
+        action="store_const", dest="loglevel", const=logging.DEBUG,
+        default=logging.WARNING,
+    )
+    parser.add_argument(
+        '-v', '--verbose',
+        help="Be verbose",
+        action="store_const", dest="loglevel", const=logging.INFO,
+    )
 
-    args = runmefirst.parse_args()
-    debug_logging = None 
-    if args.log:
-        debug_logging = logging.getLogger('debug_logger')
-        debug_logging.setLevel(logging.DEBUG)
-        # disable stdout 
-        debug_logging.propagate = False
-        fh = logging.FileHandler('debug-parser.log')
-        fh.setLevel(logging.DEBUG)
-        debug_logging.addHandler(fh)
-        
-    if os.path.isdir(NEW_API_DIR):
-        if args.overwrite:
-            logging.info("deleting and overwriting %s directory" % NEW_API_DIR)
-            import shutil
-            shutil.rmtree(NEW_API_DIR) 
-        else:
-            logging.error("The directory %s is already present. Please use --overwrite to overwrite it" % NEW_API_DIR)
-            return 
-
-    logging.info("creating %s directory at %s" % (NEW_API_DIR, os.path.abspath(NEW_API_DIR)))
-    os.makedirs(NEW_API_DIR)
-    logging.info("starting the parsing, this can take a few minutes")
-   
-    if not os.path.isdir(SDK_API_DIR):
-        logging.info("sdk-api directory could not be found")
-        logging.info("try: git submodule update --recursive")
-        logging.info("skipping sdk-api")    
-    else: 
-        # construct sdk path 
-        full_sdk_path = os.path.join(os.path.abspath(SDK_API_DIR), SDK_DOCS_DIR, CONTENT_DIR)
-        # parse sdk-api directory 
-        logging.info("parsing %s" % full_sdk_path)
-        # skip paths that start with an underscore _ 
-        for dir_path in glob.glob(full_sdk_path + "/[!_]*"):
-            for md_path in glob.glob(dir_path + "/*"):
-                if not md_path.endswith(".md"):
-                    continue 
-                parse_and_copy(md_path, debug_logging)
-        logging.info("parsing %s completed" % full_sdk_path)
+    args = parser.parse_args()
+    # level=logging.INFO, format='%(levelname)s - %(message)s'
+    logging.basicConfig(filename=args.log, level=args.loglevel)
     
-    if not os.path.isdir(DRIVER_SDK_API_DIR):
-        logging.info("windows-driver-docs directory could not be found")
-        logging.info("try: git submodule update --recursive")
-        logging.info("skipping sdk-api")    
-    else:
-        full_ddk_path = os.path.join(os.path.abspath(DRIVER_SDK_API_DIR), DRIVER_SDK_DOCS_DIR, CONTENT_DIR) 
-        logging.info("parsing %s" % full_ddk_path)
-        # skip paths that start with an underscore _ 
-        for dir_path in glob.glob(full_ddk_path + "/[!_]*"):
-            for md_path in glob.glob(dir_path + "/*"):
-                if not md_path.endswith(".md"):
-                    continue 
-                parse_and_copy(md_path, debug_logging)  
-        logging.info("parsing %s completed" % full_ddk_path)
-    logging.info("finished parsing, if using IDA add path %s to API_MD variable in idaplugin/msdocviewida.py" % os.path.abspath(NEW_API_DIR))
+    create_output_directory(NEW_API_DIR, force=args.overwrite)
+    logging.info("starting the parsing, this can take a few minutes")
+    
+    docset_paths = [
+        str(pathlib.Path(SDK_API_DIR).absolute() / SDK_DOCS_DIR / CONTENT_DIR),
+        str(pathlib.Path(DRIVER_SDK_API_DIR).absolute() / DRIVER_SDK_DOCS_DIR / CONTENT_DIR),
+    ]
+
+    for path in docset_paths:
+        logging.info(f"parsing {path}")
+        parse_from_directory(path)
+        logging.info(f"parsing {path} completed")
+    
+    logging.info("finished parsing")
+    API_MD_target_path = pathlib.Path(NEW_API_DIR).absolute()
+    logging.info(f'if using IDA set API_MD variable to "{API_MD_target_path}" in idaplugin/msdocviewida.py')
 
 
 if __name__ == "__main__":
