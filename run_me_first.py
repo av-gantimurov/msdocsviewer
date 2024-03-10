@@ -75,26 +75,21 @@ class FunctionFileDoc(object):
 
     @staticmethod
     def _clean_markdown(text: str):
-        # replace <a>, <b> tags to bold text
-        text = re.sub(r'\</?(a|b|div)[^\>]*\>', '**', text)
+        # remove <a>, <div> tags
+        text = re.sub(r'\</?(a|div)[^\>]*\>', '', text)
 
-        # replace <i> tags to italic text
-        text = re.sub(r'\</?(i)[^\>]*\>', '*', text)
-
-        # remove <div> tag
-        text = re.sub(r'\</?(div)[^\>]*\>', '', text)
-    
         # '## -description' -> '## Description'
         text = re.sub(r'# -(.+)', lambda match: f'# {match.group(1).capitalize()}', text)
+
+        text = re.sub(r'# ([^\s]+) function', r'# \1', text)
 
         # remove "See also" links section
         text = re.sub(r'## See-also[^#]+', '', text, re.MULTILINE)
 
-        # remove multiple chars
+        # remove multiple enters and unnecessary spacing
         text = text \
-            .replace('****', '**') \
-            .replace('\n**\n', '\n') \
-            .replace('\n\n\n', '\n\n')
+            .replace('\n\n\n', '\n\n') \
+            .strip(' \n\r')
 
         return text
 
@@ -157,8 +152,7 @@ def main():
     parser.add_argument(
         '-l', '--log', 
         help="Log all parsing errors to debug-parser.log",
-        default=False, 
-        action="store_true", 
+        default=None, 
     )
     parser.add_argument(
         '-o', '--overwrite', 
@@ -170,17 +164,15 @@ def main():
         '-d', '--debug',
         help="Print lots of debugging statements",
         action="store_const", dest="loglevel", const=logging.DEBUG,
-        default=logging.WARNING,
-    )
-    parser.add_argument(
-        '-v', '--verbose',
-        help="Be verbose",
-        action="store_const", dest="loglevel", const=logging.INFO,
+        default=logging.INFO,
     )
 
     args = parser.parse_args()
-    # level=logging.INFO, format='%(levelname)s - %(message)s'
-    logging.basicConfig(filename=args.log, level=args.loglevel)
+    logging.basicConfig(
+        filename=args.log,
+        level=args.loglevel,
+        format='%(levelname)s - %(message)s',
+    )
     
     create_output_directory(NEW_API_DIR, force=args.overwrite)
     logging.info("starting the parsing, this can take a few minutes")
