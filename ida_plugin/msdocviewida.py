@@ -1,67 +1,67 @@
 """
 Author: Alexander Hanel
 Version: 1.1
-Purpose: Microsoft Document (sdk-api & Driver) document viewer for IDA. 
+Purpose: Microsoft Document (sdk-api & Driver) document viewer for IDA.
 Updates:
     * Version 1.0   - Release
-    * Version 1.1   - Fixed issues with opening and closing widget 
+    * Version 1.1   - Fixed issues with opening and closing widget
 """
 
-import os
-import ida_kernwin
-import ida_idaapi
-import ida_name
+from pathlib import Path
 
+import idaapi
 from idaapi import PluginForm
 from PyQt5 import QtWidgets
 
-# Path to the Markdown docs. Folder should start with 
+# Path to the Markdown docs. Folder should start with
 API_MD = r"!!CHANGE ME!!"
 
-# global variables used to track initialization/creation of the forms.  
+# global variables used to track initialization/creation of the forms.
 started = False
-frm = None 
+frm = None
 
-def remove_function_prefix(name):
-    prefixes = [ida_name.FUNC_IMPORT_PREFIX, 'cs:', 'ds:', 'j_']
+
+def remove_function_prefix(name: str) -> str:
+    prefixes = [idaapi.FUNC_IMPORT_PREFIX, "cs:", "ds:", "j_"]
     for prefix in prefixes:
         if name.startswith(prefix):
-            return name[len(prefix):]
+            return name[len(prefix) :]
     return name
 
 
-def get_selected_api_name():
+def get_selected_api_name() -> str:
     """
-    get selected item and extract function name from it 
+    get selected item and extract function name from it
     via https://github.com/idapython/src/blob/e1c108a7df4b5d80d14d8b0c14ae73b924bff6f4/Scripts/msdnapihelp.py#L48
-    return: api name as string 
+    return: api name as string
     """
-    v = ida_kernwin.get_current_viewer()
-    highlight = ida_kernwin.get_highlight(v)
+    v = idaapi.get_current_viewer()
+    highlight = idaapi.get_highlight(v)
     if not highlight:
         # print("No identifier was highlighted")
-        return None 
+        return None
 
     name, _ = highlight
 
     # remove common prefixes
-    prefixes = [ida_name.FUNC_IMPORT_PREFIX, 'cs:', 'ds:', 'j_']
-    for prefix in prefixes:
-        if name.startswith(prefix):
-            name = name[len(prefix):]
-            break
-    
+    name = remove_function_prefix(name)
+
     # select function call in decompiler view
-    pos = name.find('(')
+    pos = name.find("(")
     if pos != -1:
         name = name[:pos]
 
     return name
 
+
 class MSDN(PluginForm):
-    def OnCreate(self, form):
+
+    def __init__(self, api_doc_path: str):
+        self._doc_path = Path(api_doc_path)
+
+    def OnCreate(self, form) -> None:
         """
-        defines widget layout 
+        defines widget layout
         """
         self.parent = self.FormToPyQtWidget(form)
         self.main_layout = QtWidgets.QVBoxLayout()
@@ -73,63 +73,72 @@ class MSDN(PluginForm):
         self.parent.setLayout(self.main_layout)
         self.load_markdown()
 
-    def load_markdown(self):
+    def load_markdown(self) -> None:
         """
-        gets api and load corresponding (if present) api markdown 
+        gets api and load corresponding (if present) api markdown
         """
         api_name = get_selected_api_name()
         if not api_name:
-            api_markdown ="#### Invalid Address Selected"
+            api_markdown = "#### Invalid Address Selected"
             self.markdown_viewer.setMarkdown(api_markdown)
             return
-        md_path = os.path.join(API_MD, api_name + ".md" )
-        if os.path.isfile(md_path):
-            with open(md_path, "r") as infile:
-                api_markdown = infile.read()
+        md_path = self._doc_path / (api_name + ".md")
+        if md_path.exists():
+            api_markdown = md_path.read_text()
         else:
-                api_markdown ="#### docs for %s could not be found" % api_name
+            api_markdown = "#### docs for %s could not be found" % api_name
         self.markdown_viewer.setMarkdown(api_markdown)
 
-    def OnClose(self, form):
+    def OnClose(self, form) -> None:
         """
         Called when the widget is closed
         """
         global frm
         global started
-        del frm 
+        del frm
         started = False
 
-class MSDNPlugin(ida_idaapi.plugin_t):
-    flags = ida_idaapi.PLUGIN_MOD
+
+class MSDNPlugin(idaapi.plugin_t):
+    flags = idaapi.PLUGIN_MOD
     comment = "API MSDN Docs"
-    help = ""
+    help = "Plugin for viewing API MSDN Doc about selected function"
     wanted_name = "API MSDN Docs"
     wanted_hotkey = "Ctrl-Shift-Z"
 
-    def init(self):
-        self.options = (ida_kernwin.PluginForm.WOPN_MENU |
-            ida_kernwin.PluginForm.WOPN_ONTOP |
-            ida_kernwin.PluginForm.WOPN_RESTORE |
-            ida_kernwin.PluginForm.WOPN_PERSIST |
-            ida_kernwin.PluginForm.WCLS_CLOSE_LATER)
-        return ida_idaapi.PLUGIN_KEEP
+    def init(self, api_doc_path: str):
+        self.options = (
+            PluginForm.WOPN_MENU
+            | PluginForm.WOPN_ONTOP
+            | PluginForm.WOPN_RESTORE
+            | PluginForm.WOPN_PERSIST
+            | PluginForm.WCLS_CLOSE_LATER
+        )
+        self._doc_path = api_doc_path
+        return idaapi.PLUGIN_KEEP
 
-    def run(self, arg):
+    def run(self, arg) -> None:
         global started
-        global frm  
+        global frm
         if not started:
-            #API_MD
-            if not os.path.isdir(API_MD):
-                print("ERROR: API_MD directory could not be found. Make sure to execute python run_me_first.py ")
+            # API_MD
+            if not Path(self._doc_path).exists():
+                print(
+                    f"ERROR: {self._doc_path} directory could not be found. "
+                    "Make sure to execute python run_me_first.py."
+                )
             frm = MSDN()
-            frm.Show("MSDN API Docs: hotkey: Ctrl-Shift-Z", options=self.options)
+            frm.Show(
+                f"MSDN API Docs: hotkey: {self.wanted_hotkey}", options=self.options
+            )
             started = True
         else:
             frm.load_markdown()
-        
-    def term(self):
+
+    def term(self) -> None:
         pass
+
 
 # -----------------------------------------------------------------------
 def PLUGIN_ENTRY():
-    return MSDNPlugin()
+    return MSDNPlugin(API_MD)
