@@ -96,6 +96,7 @@ If a directory named `plugins` is not present, it needs to be created.
 
 ### Requirements
 `pyaml` - strangely the yaml data can also be parsed as a markdown table
+`tqdm` - show progress bar while parsing documentation
 
 ### TODO
 * Port the plugin to Binary Ninja
