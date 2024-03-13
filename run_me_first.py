@@ -26,6 +26,7 @@ import re
 import shutil
 
 import yaml
+from tqdm import tqdm
 
 SDK_API_DIR = "sdk-api"
 SDK_DOCS_DIR = "sdk-api-src"
@@ -103,9 +104,12 @@ class FunctionFileDoc(object):
             handle.write(content)
 
     @staticmethod
-    def _clean_markdown(text: str):
+    def _clean_markdown(text: str) -> str:
         # remove <a>, <div> tags
         text = re.sub(r"\</?(a|div)[^\>]*\>", "", text)
+
+        # remove "See also" links section
+        text = re.sub(r"## -see-also[^#]+", "", text, re.MULTILINE)
 
         # '## -description' -> '## Description'
         text = re.sub(
@@ -114,8 +118,7 @@ class FunctionFileDoc(object):
 
         text = re.sub(r"# ([^\s]+) function", r"# \1", text)
 
-        # remove "See also" links section
-        text = re.sub(r"## See-also[^#]+", "", text, re.MULTILINE)
+        # text = re.sub(r"## See-also[^#]+", "", text, re.MULTILINE)
 
         # remove multiple enters and unnecessary spacing
         text = text.replace("\n\n\n", "\n\n").strip(" \n\r")
@@ -126,13 +129,13 @@ class FunctionFileDoc(object):
     def name(self):
         title = self.meta.get("title")
         if title is None:
-            logging.debug(f"title is not present in {self._filepath}")
-            return ValueError
+            # logging.debug(f"title is not present in {self._filepath}")
+            raise ValueError("title is not present")
 
         match = re.search("([^\s]+) function", title)
         if not match:
-            logging.debug(f"unsupported title format in {self._filepath}")
-            return ValueError
+            # logging.debug(f"unsupported title format in {self._filepath}")
+            raise ValueError("unsupported title format")
 
         return match.group(1).replace("\\", "")
 
@@ -143,23 +146,29 @@ def parse_file(filepath: str):
         filename = unit.name + ".md"
         path = pathlib.Path(NEW_API_DIR) / filename
         unit.dump(str(path))
+        return "parsed"
     except Exception as e:
-        logging.debug(f"failed to process {filepath}: {e}")
-        return None
+        logging.debug(f"{filepath}: {e}")
+        return "error"
 
 
-def parse_from_directory(dirpath: str):
+def parse_from_directory(dirpath: str) -> dict:
     path = pathlib.Path(dirpath)
+    stat = dict(parsed=0, error=0)
 
     if not path.exists() or not path.is_dir():
         logging.warning(f"{path} directory could not be found")
         logging.warning("try: git submodule update --recursive")
         logging.warning(f"skipping {path}")
-        return False
+        return {}
 
-    for filepath in path.rglob("*.md"):
-        if not filepath.name.startswith("_"):
-            parse_file(filepath)
+    # for filepath in path.rglob("*.md"):
+    #     if not filepath.name.startswith("_"):
+    files = [f for f in path.rglob("*.md") if not f.name.startswith("_")]
+    for filepath in tqdm(files, unit="files"):
+        stat[parse_file(filepath)] += 1
+
+    return stat
 
 
 def create_output_directory(dirpath: str, force: bool = False):
@@ -222,13 +231,14 @@ def main():
 
     for path in docset_paths:
         logging.info(f"parsing {path}")
-        parse_from_directory(path)
-        logging.info(f"parsing {path} completed")
+        stat = parse_from_directory(path)
+        logging.info(f"parsing {path} completed: {stat}")
 
     logging.info("finished parsing")
     API_MD_target_path = pathlib.Path(NEW_API_DIR).absolute()
     logging.info(
-        f'if using IDA set API_MD variable to "{API_MD_target_path}" in idaplugin/msdocviewida.py'
+        f'if using IDA set API_MD variable to "{API_MD_target_path}" '
+        "in idaplugin/msdocviewida.py"
     )
 
 
