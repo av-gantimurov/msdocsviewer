@@ -7,6 +7,7 @@ Updates:
     * Version 1.1   - Fixed issues with opening and closing widget
 """
 
+import json
 from pathlib import Path
 
 import idaapi
@@ -16,9 +17,14 @@ from PyQt5 import QtWidgets
 # Path to the Markdown docs. Folder should start with
 API_MD = r"!!CHANGE ME!!"
 
-# global variables used to track initialization/creation of the forms.
-started = False
-frm = None
+CONF_FILE = Path(__file__).with_suffix(".json")
+CONF = {}
+if CONF_FILE.exists():
+    with open(CONF_FILE) as cf:
+        CONF = json.load(cf)
+
+if "documentation_path" in CONF:
+    API_MD = CONF["documentation_path"]
 
 
 def remove_function_prefix(name: str) -> str:
@@ -54,10 +60,39 @@ def get_selected_api_name() -> str:
     return name
 
 
+def save_conf(doc_path: str) -> None:
+    # doc_path = str(doc_path)
+    # for line in fileinput.input(__file__, inplace=True):
+    #     if line.startswith("API_MD ="):
+    #         line = f'API_MD = r"{doc_path:r}"'
+
+    #     print(f"{fileinput.filelineno()} {line}", end="")
+    global CONF
+    CONF["documentation_path"] = doc_path
+    with open(CONF_FILE, "w") as cf:
+        json.dump(CONF, cf, ensure_ascii=False, indent=2, default=str)
+
+
 class MSDN(PluginForm):
+    comment = "API MSDN Docs"
 
     def __init__(self, api_doc_path: str):
-        self._doc_path = Path(api_doc_path)
+        super().__init__()
+        api_doc_path = Path(api_doc_path)
+        if not api_doc_path.is_dir():
+            idaapi.warning(
+                f"Plugin '{self.comment}' requires documentation directory "
+                "to be set correctly.\n"
+                f"'API_MD' now is '{API_MD}'.\n"
+                f"Select any file in documentation directory in next ask dialog "
+                "and directory will be saved for future times."
+            )
+            api_doc_path = idaapi.ask_file(False, "", "Select any docfile in folder")
+            if Path(api_doc_path).is_file():
+                api_doc_path = Path(api_doc_path).parent
+                save_conf(api_doc_path)
+                idaapi.msg(f"API_MD fixed to '{api_doc_path}'")
+        self._doc_path = api_doc_path
 
     def OnCreate(self, form) -> None:
         """
@@ -66,37 +101,43 @@ class MSDN(PluginForm):
         self.parent = self.FormToPyQtWidget(form)
         self.main_layout = QtWidgets.QVBoxLayout()
         self.markdown_viewer_label = QtWidgets.QLabel()
-        self.markdown_viewer_label.setText("API MSDN Docs")
+        self.markdown_viewer_label.setText(self.comment)
         self.markdown_viewer = QtWidgets.QTextEdit()
         self.markdown_viewer.setReadOnly(True)
         self.main_layout.addWidget(self.markdown_viewer)
         self.parent.setLayout(self.main_layout)
-        self.load_markdown()
+        # self.load_markdown()
+
+    def get_api_name(self) -> str:
+        api_name = get_selected_api_name()
+        # self.markdown_viewer_label.setText(
+        if not api_name:
+            api_name = idaapi.ask_str("", 0, "MSDN API")
+        return api_name
+
+    def get_api_file(self, api_name: str) -> Path:
+        for path in self._doc_path.rglob(api_name + "*.md"):
+            return path
+        return None
+
+        # return self._doc_path / (api_name + ".md")
 
     def load_markdown(self) -> None:
         """
         gets api and load corresponding (if present) api markdown
         """
-        api_name = get_selected_api_name()
+        api_name = self.get_api_name()
+
         if not api_name:
-            api_markdown = "#### Invalid Address Selected"
-            self.markdown_viewer.setMarkdown(api_markdown)
             return
-        md_path = self._doc_path / (api_name + ".md")
-        if md_path.exists():
+
+        md_path = self.get_api_file(api_name)
+        if md_path and md_path.exists():
             api_markdown = md_path.read_text()
         else:
             api_markdown = "#### docs for %s could not be found" % api_name
-        self.markdown_viewer.setMarkdown(api_markdown)
 
-    def OnClose(self, form) -> None:
-        """
-        Called when the widget is closed
-        """
-        global frm
-        global started
-        del frm
-        started = False
+        self.markdown_viewer.setMarkdown(api_markdown)
 
 
 class MSDNPlugin(idaapi.plugin_t):
@@ -104,9 +145,15 @@ class MSDNPlugin(idaapi.plugin_t):
     comment = "API MSDN Docs"
     help = "Plugin for viewing API MSDN Doc about selected function"
     wanted_name = "API MSDN Docs"
-    wanted_hotkey = "Ctrl-Shift-Z"
+    wanted_hotkey = "Ctrl-Shift-F"
 
-    def init(self, api_doc_path: str):
+    _frm = None
+
+    def __init__(self, api_doc_path: str = API_MD):
+        super().__init__()
+        self._doc_path = api_doc_path
+
+    def init(self):
         self.options = (
             PluginForm.WOPN_MENU
             | PluginForm.WOPN_ONTOP
@@ -114,26 +161,16 @@ class MSDNPlugin(idaapi.plugin_t):
             | PluginForm.WOPN_PERSIST
             | PluginForm.WCLS_CLOSE_LATER
         )
-        self._doc_path = api_doc_path
         return idaapi.PLUGIN_KEEP
 
     def run(self, arg) -> None:
-        global started
-        global frm
-        if not started:
-            # API_MD
-            if not Path(self._doc_path).exists():
-                print(
-                    f"ERROR: {self._doc_path} directory could not be found. "
-                    "Make sure to execute python run_me_first.py."
-                )
-            frm = MSDN()
-            frm.Show(
-                f"MSDN API Docs: hotkey: {self.wanted_hotkey}", options=self.options
-            )
-            started = True
-        else:
-            frm.load_markdown()
+        if not self._frm:
+            self._frm = MSDN(self._doc_path)
+
+        self._frm.Show(
+            f"MSDN API Docs: hotkey: {self.wanted_hotkey}", options=self.options
+        )
+        self._frm.load_markdown()
 
     def term(self) -> None:
         pass
@@ -141,4 +178,4 @@ class MSDNPlugin(idaapi.plugin_t):
 
 # -----------------------------------------------------------------------
 def PLUGIN_ENTRY():
-    return MSDNPlugin(API_MD)
+    return MSDNPlugin()
