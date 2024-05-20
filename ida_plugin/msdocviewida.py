@@ -73,6 +73,54 @@ def save_conf(doc_path: str) -> None:
         json.dump(CONF, cf, ensure_ascii=False, indent=2, default=str)
 
 
+class MSDNChooser(idaapi.Choose):
+
+    def __init__(
+        self,
+        /,
+        doc_path: str,
+        flags: int = 0,
+        embedded: bool = False,
+        width: int = None,
+        height: int = None,
+    ):
+        super().__init__(
+            "MSDN API",
+            [["API Name", 30], ["Path", 60]],
+            flags=flags | idaapi.Choose.CH_RESTORE,
+            embedded=embedded,
+            width=width,
+            height=height,
+        )
+        self.doc_path = doc_path
+        self.items = {}
+        self.load()
+
+    def load(self) -> None:
+        for api_md in Path(self.doc_path).rglob("*.md"):
+            self.items[api_md.stem] = api_md
+
+    def OnGetSize(self) -> int:
+        return len(self.items)
+
+    def OnGetLine(self, n: int) -> list:
+        _items = list(self.items.keys())
+        api = _items[n]
+        return [api, self.items[api].name]
+
+    def GetApiFile(self, n: int) -> Path:
+        return self.items[list(self.items.keys())[n]]
+
+    def ChooseApiFile(self) -> Path:
+        api_name = get_selected_api_name()
+        if api_name in self.items:
+            return self.items[api_name]
+        sel = self.Show(modal=True)
+        if sel >= 0:
+            return self.GetApiFile(sel)
+        return None
+
+
 class MSDN(PluginForm):
     comment = "API MSDN Docs"
 
@@ -93,6 +141,7 @@ class MSDN(PluginForm):
                 save_conf(api_doc_path)
                 idaapi.msg(f"API_MD fixed to '{api_doc_path}'")
         self._doc_path = api_doc_path
+        self._chooser = MSDNChooser(api_doc_path)
 
     def OnCreate(self, form) -> None:
         """
@@ -126,16 +175,9 @@ class MSDN(PluginForm):
         """
         gets api and load corresponding (if present) api markdown
         """
-        api_name = self.get_api_name()
 
-        if not api_name:
-            return
-
-        md_path = self.get_api_file(api_name)
-        if md_path and md_path.exists():
-            api_markdown = md_path.read_text()
-        else:
-            api_markdown = "#### docs for %s could not be found" % api_name
+        md_path = self._chooser.ChooseApiFile()
+        api_markdown = md_path.read_text()
 
         self.markdown_viewer.setMarkdown(api_markdown)
 
